@@ -17,14 +17,29 @@ import itertools
 plt.close("all")
 
 def calcul_ponderation_top_k(retour):
-    # Cette fonction permet d'accentuer le poids des retours autours de -10%
-    # f(r_t,k) dans la publication
+    """
+    Cette fonction permet d'accentuer le poids des retours autours de -10%
+    f(r_t,k) dans la publication
+
+    Parameters
+    ----------
+    retour : tableau NumPy
+
+    Returns
+    -------
+    ponderation_retour : tableau NumPy
+
+    """
+    
     ponderation_retour = np.exp(-(retour + 0.1)**2)
+    
     return ponderation_retour
 
 
 def lecture_donnees(chemin_dossier):
     """
+    Cette fonction parcourt le dossier en argument pour en extraire le 
+    contenu des fichiers csv presents
 
     Parameters
     ----------
@@ -42,7 +57,6 @@ def lecture_donnees(chemin_dossier):
     
     # Listes vides pour conserver les noms des cours et realiser la fusion
     # des donnes lues sous forme de dataFram
-    
     liste_noms_cours = []
     liste_dataframe_cours = []
     
@@ -78,6 +92,8 @@ def lecture_donnees(chemin_dossier):
 
 def lecture_csv(chemin_dossier, fichier):
     """
+    Cette fonction lit le fichier csv donne par le chemin et le nom du fichier
+    et le convertit en objet Pandas
 
     Parameters
     ----------
@@ -86,7 +102,7 @@ def lecture_csv(chemin_dossier, fichier):
 
     Returns
     -------
-    series_cours : donnes du csv sous forme d'objet Serie
+    series_cours : donnes du csv sous forme d'objet dataFrame
 
     """
     
@@ -116,10 +132,10 @@ def lecture_csv(chemin_dossier, fichier):
     # Construction d'un dictionnaire en dates (clés) et valeurs de cloture (valeurs)
     d = {"dates" : liste_dates, "valeurs_"+fichier : liste_valeurs}
     
-    # Transformation du dictionnaire en objet Serie
-    series_cours = pd.DataFrame(d)
+    # Transformation du dictionnaire en objet dataFrame
+    dataFrame_cours = pd.DataFrame(d)
     
-    return series_cours
+    return dataFrame_cours
 
 
 def calculer_rendement(dataFrameGlobal):
@@ -261,8 +277,6 @@ def calcul_retours_modelises(a, P, *args):
     
     # Pour chaque instant t, pour chaque cours k
     for t, k in itertools.product(range(T), range(n_cours)):
-        #print("(t, k) = ({}, {})".format(t, k))
-        #print(d[t, k])
         
         # Calcul du terme d
         d[t, k] = a[k] + retours[t,-1]*np.dot(P[k,:-1], P[-1,:-1])
@@ -298,8 +312,6 @@ def objectif(aP, *args):
     # On recupere le nombre de cours depuis la 
     # taille de aP = n_cours^2 + 3*n_cours + 1
     n_cours = int( (-3+np.sqrt(9-4*(1-aP.size)))/2 + 1 ) - 1
-    #print("-----------------------------" + str(aP.size))
-    #print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$" + str(n_cours))
     
     # On decoupe le vecteur aP en a de taille C, et en P de taille CxC
     a = aP[:n_cours]
@@ -321,7 +333,7 @@ def objectif(aP, *args):
         valeurs[t, k] = calcul_ponderation_top_k(retours[t, k]) * (retours[t, k] - retours_modelises[t, k])**2
     
     # On somme tous les residus avec le terme de penalisation
-    valeur_objectif = np.sum(valeurs) + lambd * np.sum(P**2)
+    valeur_objectif = np.sum(valeurs) + lambd * ( np.sum(a**2) + np.sum(P**2))
     
     return valeur_objectif
 
@@ -334,8 +346,7 @@ def apprentissage_connexions(covariances, *args):
     Parameters
     ----------
     covariances : matrice de covariances de taille CxC
-    *args : TYPE
-        DESCRIPTION.
+    *args : arguments pour la fonction contenant les retours et lambda
 
     Returns
     -------
@@ -351,26 +362,18 @@ def apprentissage_connexions(covariances, *args):
     # Initialisation de a avec les rendements moyens
     n_cours = covariances.shape[0] - 1 # nombre de cours, hors CAC40
     a_0 = np.mean((args[0])[:, :-1], axis=0) # moyenne de retour k ~= a_k
-    #print("+++++++++++++++" + str(a_0.size))
     
     # Initialisation de la matrice P via decomposition de Cholesky 
     # de la matrice de covariance
-    #print("/////////" + str(covariances.shape))
     P_0 = np.linalg.cholesky(covariances) # P = racine(cov)
-    #print("/////////" + str(P_0.shape))
     
     # Creation du vecteur de parametres aP = [a, P]
     aP_0 = np.concatenate((a_0, P_0.flatten()))
-    #print("+++++++++++++++" + str(aP_0.size))
-    
-    # Verification du gradient
-    #c = check_grad(objectif, calcul_gradient_a_P, aP_0, args[0], args[1])
     
     print("Cout initial = {}".format(objectif(aP_0, args[0], args[1])))
     
     # Appel de la methode d'optimisation
-    solution = minimize(objectif, aP_0, args=args, 
-                      method="BFGS",# jac=calcul_gradient_a_P, # Nelder-Mead
+    solution = minimize(objectif, aP_0, args=args, method="BFGS",
                       options={'gtol': 1e-6, 'disp': True})
     
     # Extraction de la solution (a, P, connections)
