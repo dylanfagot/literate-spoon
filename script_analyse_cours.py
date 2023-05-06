@@ -12,17 +12,17 @@ In International Conference on Machine Learning (pp. 109-117). PMLR.
 @auteur: Dylan Fagot
 """
 
-import matplotlib.pyplot as plt
 import numpy as np
 import fonctions as f
 
 if __name__ == "__main__":
     
     """
-    Parametres de ponderation du risque et de regularisation de P
+    Parametres initiaux
     """
-    alpha = 0.5
-    lbda = 1e-3
+    alpha = 0.5 # ponderation du risque
+    lbda = 1e-4 # regularisation de P
+    taille_historique = 100 # nombre de jours pris en compte dans les donnees
     
     """
     --------- Chargement des donnees et calcul des rendements ------
@@ -31,13 +31,14 @@ if __name__ == "__main__":
     chemin_csv = "donnees_cours_CAC40"
     
     # On appelle la fonction de lecture des valeurs de cours
-    donnees_lues = f.lecture_donnees(chemin_csv)
+    donnees_lues, liste_noms_cours = f.lecture_donnees(chemin_csv)
     
-    # Calcul des rendements associes a chaque cours
-    rendements = f.calculer_rendement(donnees_lues)
+    # Calcul des rendements associes a chaque cours sur les
+    # taille_historique dernières valeurs de cours
+    rendements = f.calculer_rendement(donnees_lues)[-taille_historique::]
     
     # Rendements moyens par cours
-    rendements_moyens = np.mean(rendements[1:,:], axis=0)
+    rendements_moyens = np.mean(rendements, axis=0)
     
     """
     --------- Analyse sur matrice de covariance ------
@@ -45,7 +46,7 @@ if __name__ == "__main__":
     
     print(" --------- Calcul sur covariances... ---------")
     
-    # Calcul de la matrice de covariance
+    # Calcul de la matrice de covariances
     matrice_Q = np.cov(rendements, rowvar=False)
     
     # Resolution du probleme de diversification via covariances
@@ -59,7 +60,7 @@ if __name__ == "__main__":
     
     print(" --------- Calcul sur connexions... ---------")
     # Apprentissage de la matrice de connexions
-    a_opt, P_opt, matrice_C, solution = f.apprentissage_connexions(matrice_Q, rendements, lbda)
+    a_opt, P_opt, matrice_C = f.apprentissage_connexions(matrice_Q, rendements, lbda)
 
     # Resolution du probleme de diversification via connexions
     matrice_C_sans_CAC40 = matrice_C[:-1, :-1]
@@ -71,7 +72,9 @@ if __name__ == "__main__":
     """
     
     print(" --------- Enregistrement des parametres... ---------")
-    np.savez("parametres_initiaux.npz", a_opt = a_opt, matrice_C = matrice_C, matrice_Q = matrice_Q, w_Q = w_Q, w_C = w_C)
+    np.savez("parametres_initiaux.npz", a_opt = a_opt, matrice_C = matrice_C, 
+             matrice_Q = matrice_Q, w_Q = w_Q, w_C = w_C,
+             rendements = rendements, rendements_moyens = rendements_moyens)
     
     
     

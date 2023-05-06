@@ -10,13 +10,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os, csv
 import pandas as pd
-from scipy.optimize import Bounds, LinearConstraint, minimize
+from scipy.optimize import Bounds, LinearConstraint, minimize, check_grad
 import itertools
 
 # On supprime toutes les fenetres matplotlib eventuellement ouvertes
 plt.close("all")
 
-def calcul_ponderation_top_k(retour):
+def calcul_ponderation_top_k(retours):
     """
     Cette fonction permet d'accentuer le poids des retours autours de -10%
     f(r_t,k) dans la publication
@@ -31,9 +31,9 @@ def calcul_ponderation_top_k(retour):
 
     """
     
-    ponderation_retour = np.exp(-(retour + 0.1)**2)
+    ponderation_retours = np.exp(-(retours + 0.1)**2)
     
-    return ponderation_retour
+    return ponderation_retours
 
 
 def lecture_donnees(chemin_dossier):
@@ -87,7 +87,7 @@ def lecture_donnees(chemin_dossier):
     np.save("dataframe.npy", dataframe_global)
     
     print("Extraction des cours du dossier " + chemin_dossier + " terminee")
-    return dataframe_global
+    return dataframe_global, liste_noms_cours
 
 
 def lecture_csv(chemin_dossier, fichier):
@@ -156,13 +156,8 @@ def calculer_rendement(dataFrameGlobal):
     # Conversion du dataFrame sans dates en tableau NumPy de reels
     tableau_numpy = ((dataFrameGlobal.to_numpy())[:, 1:]).astype(float)
     
-    # On recupere le nombre de cours du tableau resultant
-    n_cours = tableau_numpy.shape[1]
-    
     # On calcule les rendements, avec r=0 pour t=0
-    rendements = np.concatenate((np.zeros((1, n_cours)), np.diff( tableau_numpy, 1, axis=0))) / tableau_numpy
-    
-    #rendements_test = rendements[:100,:]
+    rendements = np.diff( tableau_numpy, 1, axis=0) / tableau_numpy[1:,:]
     
     return rendements
 
@@ -269,6 +264,7 @@ def calcul_retours_modelises(a, P, *args):
     # On recupere les retours empiriques et les tailles
     retours = args[0][0]
     T = retours.shape[0]
+
     n_cours = retours.shape[1]-1
     
     # Initialisation du calcul des retours modelises et des termes d
@@ -338,6 +334,7 @@ def objectif(aP, *args):
     return valeur_objectif
 
 
+
 def apprentissage_connexions(covariances, *args):
     """
     Cette fonction permet de realiser l'apprentissage des connexions
@@ -370,20 +367,172 @@ def apprentissage_connexions(covariances, *args):
     # Creation du vecteur de parametres aP = [a, P]
     aP_0 = np.concatenate((a_0, P_0.flatten()))
     
-    print("Cout initial = {}".format(objectif(aP_0, args[0], args[1])))
+    # On extrait un sous ensemble des donnees (deux dates)
+    args_2 = (args[0][:1, :], args[1])
     
-    # Appel de la methode d'optimisation
-    solution = minimize(objectif, aP_0, args=args, method="BFGS",
-                      options={'gtol': 1e-6, 'disp': True})
+    # Verification du gradient : 1/(T*C) * somme( (grad - grad_est)**2 )
+    c = check_grad(objectif, calcul_gradient_a_P, aP_0, args_2[0], args_2[1]) / args_2[0].size
+    print("Erreur gradient = {}".format(c))
     
-    # Extraction de la solution (a, P, connections)
+    # Appel de la methode d'optimisation (deux dates)
+    solution = minimize(objectif, aP_0, args=args_2, method="BFGS", jac=calcul_gradient_a_P,
+                      options={'maxiter': 100, 'gtol': 1e-5, 'disp': True})
+    
+    # Extraction de la solution initiale (a, P, cout)
     aP_opt = solution.x
     cout = solution.fun
-    print("Cout final = {}".format(cout))
     
+    print("Cout initial (2) = {}".format(objectif(aP_0, args_2[0], args_2[1])))
+    print("Cout final (2) = {}".format(cout))
+    
+    # Appel de la methode d'optimisation (toutes dates)
+    solution2 = minimize(objectif, aP_opt, args=args, method="BFGS", jac=calcul_gradient_a_P,
+                       options={'maxiter': 100,
+                                #'gtol': 1e-10,
+                                'disp': True})
+    
+    # Extraction de la solution (a, P, cout)
+    aP_opt = solution2.x
+    cout = solution2.fun
+    
+    print("Cout initial (total) = {}".format(objectif(aP_0, args[0], args[1])))
+    print("Norme aP = {}".format(np.sum(aP_0**2)))
+    print("Cout final (total) = {}".format(cout))
+    print("Norme aP = {}".format(np.sum(aP_opt**2)))
+    
+    # Optimisation terminee, on sort les resultats
     a_opt = aP_opt[:n_cours]
     P_opt = np.reshape(aP_opt[n_cours:], (n_cours+1, n_cours+1))
-    connection = np.dot(P_opt.transpose(), P_opt)
+    connection = np.dot(P_opt, P_opt.transpose())
     
-    return a_opt, P_opt, connection, solution
+    return a_opt, P_opt, connection
 
+def calcul_gradient_a_P(aP, *args):
+    """
+    Calcule le gradient de la fonction objectif
+
+    Parameters
+    ----------
+    aP : point ou est calcule le gradient
+    *args : rendements et parametre de regularisation
+
+    Returns
+    -------
+    gradient_a_P : gradient de la fonciton objectif au point aP
+
+    """
+    
+    # On recupere le nombre de cours depuis la 
+    # taille de aP = n_cours^2 + 3*n_cours + 1
+    n_cours = int( (-3+np.sqrt(9-4*(1-aP.size)))/2 + 1 ) - 1
+    
+    # On decoupe le vecteur aP en a de taille C, et en P de taille CxC
+    a = aP[:n_cours]
+    P = np.reshape(aP[n_cours:], (n_cours+1, n_cours+1))
+    C = np.dot(P.transpose(), P)
+    
+    # Calcul des retours modelises pour les valeurs de a et P donnees
+    retours_modelises = calcul_retours_modelises(a, P, args)
+    
+    # On recupere les arguments separement
+    retours = args[0]
+    lbda = args[1]
+    
+    # Calcul des matrices intermediaires
+    F = calcul_ponderation_top_k(retours[:,:-1])
+    R = retours[:, :-1] - retours_modelises
+    F_R_t = (F*R).transpose()
+    
+    # Gradient de l'objectif, composante sur a
+    gradient_a = 2*lbda*a - 2*np.sum(F*R, axis=0)
+    
+    # Gradient de l'objectif, composante sur P
+    gradient_P = np.zeros(P.shape)
+    gradient_P[:-1,:-1] = -2*np.dot(F_R_t, np.outer(retours[:,-1], P[-1, :-1]))
+    diff_r_d = (retours[:, :-1] - (a + np.outer(retours[:,-1], C[:-1, -1])))
+    
+    for k in range(n_cours):
+        # On ajuste ensuite chaque ligne du gradient 0 <= k < C
+        P_tronquee_k = np.copy(P[:-1, :-1])
+        P_tronquee_k[k,:] = 0
+        gradient_P[k, :-1] += -2 * np.dot(F_R_t[k, :], np.dot(diff_r_d, P_tronquee_k))
+    
+    # On met a jour separement la derniere ligne du gradient
+    gradient_P[-1, :-1] +=  -2 * np.dot(retours[:, -1], np.dot(F_R_t.transpose(), P[:-1, :-1]))
+    
+    # On rajoute la partie liee a la regularisation
+    gradient_P += 2 * lbda*P
+        
+    # On remet le gradient sous forme de vecteur de taille C + (C+1)x(C+1)
+    gradient_a_P = np.zeros(aP.size)
+    gradient_a_P[:n_cours] = gradient_a
+    gradient_a_P[n_cours:] = gradient_P.flatten()
+    
+    return gradient_a_P
+    
+def descente_gradient_online(aP_0, eta, *args):
+    """
+    Implementation de l'algorithme de descente donnee dans la publication
+    Non utilise car demande de fixer un parametre eta
+
+    Parameters
+    ----------
+    aP_0 : solution de depart pour l'optimisation
+    eta : pas de descente
+    *args : arguments englobant les retours et le parametre lambda
+
+    Returns
+    -------
+    aP_opt : solution resultant de l'optimisation
+
+    """
+    # On recupere le nombre de points de donnees (nombre de dates)
+    T = args[0].shape[0]
+    
+    # Initialisation de la solution
+    aP_opt = np.copy(aP_0)
+    cout = objectif(aP_opt, args[0], args[1])
+    print("Depart de descente initiale : cout = {}".format(cout))
+    print("Penalite = {}".format(args[1]*np.sum(aP_opt**2)))
+    n_iter = 10
+    
+    # Phase initiale
+    # On realise 100 pas de descente sur un point de donnee
+    cout = objectif(aP_opt, args[0][np.newaxis,0,:], args[1])
+    for i in range(n_iter):
+        aP_opt -= eta*calcul_gradient_a_P(aP_opt, args[0][np.newaxis,0,:], args[1])
+        
+        if (np.mod(i+1,1)==0):
+            cout_p = cout
+            cout = objectif(aP_opt, args[0][np.newaxis,0,:], args[1])
+            tol = (cout-cout_p)/cout_p
+            print(">iteration t=0, i={:03d}/{} cout = {}, tol = {:e}".format(i+1, n_iter, cout, tol))
+        
+    # Phase online
+    # Puis on realise un pas de descente par donnee supplementaire
+    cout = objectif(aP_opt, args[0], args[1])
+    print("Depart de descente online : cout = {}".format(cout))
+    for t in range(1,T):
+        for i in range(n_iter):
+            grad = calcul_gradient_a_P(aP_opt, args[0][:t,:], args[1])
+            aP_opt -= eta*grad
+            
+            if (np.mod(t+1,100) == 0):
+                cout_p = cout
+                cout = objectif(aP_opt, args[0], args[1])
+                tol = (cout-cout_p)/cout_p
+                print(">>iteration t={}/{} cout = {}, tol = {:e}".format(t+1, T, cout, tol))
+    
+    cout = objectif(aP_opt, args[0], args[1])
+    print("Fin de descente : cout = {}".format(cout))
+    
+    return aP_opt
+    
+    
+    
+    
+    
+    
+    
+    
+    
